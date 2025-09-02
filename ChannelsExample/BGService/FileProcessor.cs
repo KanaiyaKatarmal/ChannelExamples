@@ -1,4 +1,5 @@
-﻿using System.Threading.Channels;
+﻿using ChannelsExample.Worker;
+using System.Threading.Channels;
 
 namespace ChannelsExample
 {
@@ -19,25 +20,53 @@ namespace ChannelsExample
     public class FileProcessor : BackgroundService
     {
         private readonly Channel<FileImportRequest> _channel;
+        private readonly IServiceProvider _serviceProvider;
+        private readonly ILogger<FileProcessor> _logger;
 
-        public FileProcessor(Channel<FileImportRequest> channel)
+        public FileProcessor(
+            Channel<FileImportRequest> channel,
+            IServiceProvider serviceProvider,
+            ILogger<FileProcessor> logger)
         {
             _channel = channel;
+            _serviceProvider = serviceProvider;
+            _logger = logger;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            Console.WriteLine("File processor started...");
+            _logger.LogInformation("File processor started...");
 
             await foreach (var request in _channel.Reader.ReadAllAsync(stoppingToken))
             {
-                Console.WriteLine($"Processing Request {request.RequestId}, Size: {request.FileData.Length} bytes");
+                try
+                {
+                    _logger.LogInformation(
+                        "Processing Request {RequestId}, Size: {FileSize} bytes",
+                        request.RequestId,
+                        request.FileData.Length);
 
-                // Simulate work (e.g., saving file, parsing, etc.)
-                await Task.Delay(2000, stoppingToken);
+                    // Create a new DI scope per request
+                    using (var scope = _serviceProvider.CreateScope())
+                    {
+                        var worker = scope.ServiceProvider.GetRequiredService<IFileImportWorker>();
+                        await worker.Import(request);
+                    }
+
+                    _logger.LogInformation("Successfully processed Request {RequestId}", request.RequestId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error processing Request {RequestId}", request.RequestId);
+                    // Optionally push to a dead-letter queue or retry mechanism
+                }
+                finally
+                {
+                    request.FileData?.Dispose(); // Ensure stream is freed
+                }
             }
 
-            Console.WriteLine("File processor stopped.");
+            _logger.LogInformation("File processor stopped.");
         }
     }
 }

@@ -1,4 +1,5 @@
 using ChannelsExample;
+using ChannelsExample.Worker;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -9,6 +10,9 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+
+builder.Services.AddSwaggerGen();
 
 // Register channel as singleton
 builder.Services.AddSingleton(Channel.CreateUnbounded<ChannelRequest>());
@@ -25,7 +29,7 @@ builder.Services.AddHostedService<Processor>();
 
  // Register background processor
 builder.Services.AddHostedService<FileProcessor>();
-
+builder.Services.AddScoped<IFileImportWorker, FileImportWorker>();
 
 
 var app = builder.Build();
@@ -36,7 +40,11 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
 app.MapGet("/Send", async (Channel<ChannelRequest> _channel) =>
 {
@@ -46,38 +54,40 @@ app.MapGet("/Send", async (Channel<ChannelRequest> _channel) =>
 .WithName("Send");
 
 
-app.MapGet("/FileUpload", async ([FromForm] IFormFile[] files,Channel<FileImportRequest> _channel) =>
-{
-    List<FileImportResponseModel> result = new();
-
-    foreach (var file in files)
+app.MapPost("/FileUpload",
+    async ([FromForm] IFormFileCollection files, Channel<FileImportRequest> _channel) =>
     {
-        var requestId = Guid.NewGuid().ToString();
+        List<FileImportResponseModel> result = new();
 
-        var request = new FileImportRequest
+        foreach (var file in files)
         {
-            RequestId = requestId,
-            FileData = new MemoryStream()
-        };
+            var requestId = Guid.NewGuid().ToString();
 
-        await file.CopyToAsync(request.FileData);
-        request.FileData.Position = 0;
+            var request = new FileImportRequest
+            {
+                RequestId = requestId,
+                FileData = new MemoryStream()
+            };
 
-        // Push into background processor channel
-        await _channel.Writer.WriteAsync(request);
+            await file.CopyToAsync(request.FileData);
+            request.FileData.Position = 0;
 
-        // Prepare response
-        result.Add(new FileImportResponseModel
-        {
-            RequestId = requestId,
-            FileName = file.FileName,
-            FileSize = file.Length,
-            Status = "Scheduled for Processing"
-        });
-    }
-    return result;
-})
-.WithName("Test");
+            await _channel.Writer.WriteAsync(request);
+
+            result.Add(new FileImportResponseModel
+            {
+                RequestId = requestId,
+                FileName = file.FileName,
+                FileSize = file.Length,
+                Status = "Scheduled for Processing"
+            });
+        }
+
+        return result;
+    })
+    .WithName("FileUpload")
+    .Accepts<IFormFile[]>("multipart/form-data")   // ?? important
+    .DisableAntiforgery();
 
 
 app.Run();
