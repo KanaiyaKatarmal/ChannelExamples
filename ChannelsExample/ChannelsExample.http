@@ -1,0 +1,6 @@
+@ChannelsExample_HostAddress = http://localhost:5269
+
+GET {{ChannelsExample_HostAddress}}/Send/
+Accept: application/json
+
+###
